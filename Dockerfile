@@ -4,45 +4,35 @@
 # 1) Build (Vite/React)
 # ----------------------------
 FROM node:20-alpine AS build
-
 WORKDIR /app
 
-# Najpierw lockfile + package.json dla cache warstw
-COPY package.json package-lock.json* pnpm-lock.yaml* yarn.lock* ./
+# Narzędzia pod node-gyp (często konieczne na Alpine)
+RUN apk add --no-cache python3 make g++ libc6-compat
 
-# Instalacja zależności zależnie od użytego lockfile
-RUN if [ -f package-lock.json ]; then npm ci; \
-    elif [ -f pnpm-lock.yaml ]; then corepack enable && pnpm install --frozen-lockfile; \
-    elif [ -f yarn.lock ]; then yarn install --frozen-lockfile; \
-    else npm install; fi
+# Cache warstw: najpierw tylko manifesty
+COPY package.json ./
+COPY package-lock.json* ./
 
-# Kod źródłowy
+# Jeśli masz problemy z peer deps, odkomentuj --legacy-peer-deps
+RUN npm install --no-audit --no-fund
+# RUN npm install --no-audit --no-fund --legacy-peer-deps
+
+# Reszta kodu
 COPY . .
 
-# build-arg z docker-compose: API_KEY=...
+# build-arg z docker-compose
 ARG API_KEY
-
-# Vite udostępnia w kodzie tylko zmienne z prefixem VITE_
-# (czytane w aplikacji: import.meta.env.VITE_API_KEY)
 ENV VITE_API_KEY="${API_KEY}"
 
-# Build produkcyjny (Vite -> /app/dist)
 RUN npm run build
 
 # ----------------------------
 # 2) Runtime (Nginx)
 # ----------------------------
-FROM nginx:1.27-alpine AS runtime
+FROM nginx:1.27-alpine
 
-# Własny config Nginx (SPA routing + cache)
 COPY nginx.conf /etc/nginx/conf.d/default.conf
-
-# Wrzucamy zbudowane pliki
 COPY --from=build /app/dist /usr/share/nginx/html
-
-# (opcjonalnie) prosty healthcheck endpoint jest w nginx.conf (/healthz)
-# HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
-#   CMD wget -qO- http://127.0.0.1/healthz || exit 1
 
 EXPOSE 80
 CMD ["nginx", "-g", "daemon off;"]
